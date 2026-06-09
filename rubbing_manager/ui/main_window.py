@@ -18,6 +18,7 @@ from .compare_dialog import CompareDialog
 from .batch_import_dialog import BatchImportDialog
 from .comparison_history_dialog import ComparisonHistoryDialog
 from .feedback_history_dialog import FeedbackHistoryDialog
+from .edition_manager_dialog import EditionManagerDialog
 from .utils import load_pixmap_from_path
 
 
@@ -149,6 +150,8 @@ class MainWindow(QMainWindow):
         self.detail_panel.deleteRequested.connect(self._on_rubbing_deleted)
         self.detail_panel.findSimilarRequested.connect(self._on_find_similar)
         self.detail_panel.viewComparisonsRequested.connect(self._on_view_comparisons)
+        self.detail_panel.viewEditionGraphRequested.connect(self._on_view_edition_graph_from_detail)
+        self.detail_panel.editionGroupChanged.connect(self._on_edition_group_changed)
         center_layout.addWidget(self.detail_panel, 1)
         splitter.addWidget(center_panel)
 
@@ -198,6 +201,10 @@ class MainWindow(QMainWindow):
         act_feedback = QAction("反馈与权重", self)
         act_feedback.triggered.connect(self._on_view_feedback)
         toolbar.addAction(act_feedback)
+
+        act_edition = QAction("版别关系图谱", self)
+        act_edition.triggered.connect(self._on_view_edition_graph)
+        toolbar.addAction(act_edition)
 
         toolbar.addSeparator()
 
@@ -492,6 +499,23 @@ class MainWindow(QMainWindow):
             updated = self._service.get_rubbing(self._current_rubbing["id"])
             self._current_rubbing = updated
 
+    def _on_view_edition_graph(self):
+        dialog = EditionManagerDialog(self._service, self)
+        dialog.exec()
+
+    def _on_view_edition_graph_from_detail(self):
+        dialog = EditionManagerDialog(self._service, self)
+        if self._current_rubbing:
+            groups = self._service.get_edition_groups_for_rubbing(
+                self._current_rubbing["id"]
+            )
+            if groups:
+                dialog.focus_on_group(groups[0]["id"])
+        dialog.exec()
+
+    def _on_edition_group_changed(self):
+        self.statusBar().showMessage("版别组信息已更新", 3000)
+
     def _on_about(self):
         QMessageBox.about(
             self, "关于",
@@ -504,6 +528,7 @@ class MainWindow(QMainWindow):
             "• 并排对比与人工确认结论\n"
             "• 多条件组合筛选与模糊检索\n"
             "• 相似结果人工反馈学习\n"
-            "• 动态权重调整与可视化\n\n"
+            "• 动态权重调整与可视化\n"
+            "• 版别关系图谱与谱系管理\n\n"
             "技术栈：Python + PySide6 + SQLite + OpenCV"
         )

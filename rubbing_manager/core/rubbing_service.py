@@ -12,6 +12,8 @@ from ..db.database import (
     SimilarityFeedbackDAO,
     WeightHistoryDAO,
     SystemSettingDAO,
+    EditionGroupDAO,
+    EditionRelationDAO,
     compute_file_hash,
     get_processed_dir,
     get_data_dir,
@@ -497,3 +499,121 @@ class RubbingService:
             self.DEFAULT_TEXTURE_WEIGHT,
             reason="重置为默认权重",
         )
+
+    def list_edition_groups(
+        self,
+        keyword: Optional[str] = None,
+        era: Optional[str] = None,
+        inscription: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return EditionGroupDAO.list_all(
+            keyword=keyword, era=era, inscription=inscription
+        )
+
+    def get_edition_group(self, group_id: int) -> Optional[Dict[str, Any]]:
+        return EditionGroupDAO.get_by_id(group_id)
+
+    def create_edition_group(self, data: Dict[str, Any]) -> int:
+        return EditionGroupDAO.create(data)
+
+    def update_edition_group(self, group_id: int, data: Dict[str, Any]) -> None:
+        EditionGroupDAO.update(group_id, data)
+
+    def delete_edition_group(self, group_id: int) -> Tuple[bool, str]:
+        members = EditionGroupDAO.get_members(group_id)
+        relations = EditionRelationDAO.get_by_group(group_id)
+        if members:
+            return False, f"该版别组包含 {len(members)} 个拓片，无法直接删除。请先移除所有成员。"
+        if relations:
+            return False, f"该版别组有 {len(relations)} 条关系，无法直接删除。请先删除相关关系。"
+        EditionGroupDAO.delete(group_id)
+        return True, "删除成功"
+
+    def get_edition_groups_for_rubbing(self, rubbing_id: int) -> List[Dict[str, Any]]:
+        return EditionGroupDAO.get_by_rubbing(rubbing_id)
+
+    def get_edition_group_members(self, group_id: int) -> List[Dict[str, Any]]:
+        return EditionGroupDAO.get_members(group_id)
+
+    def add_rubbing_to_group(self, group_id: int, rubbing_id: int, notes: str = "") -> None:
+        EditionGroupDAO.add_member(group_id, rubbing_id, notes)
+
+    def remove_rubbing_from_group(self, group_id: int, rubbing_id: int) -> None:
+        EditionGroupDAO.remove_member(group_id, rubbing_id)
+
+    def is_rubbing_in_group(self, group_id: int, rubbing_id: int) -> bool:
+        return EditionGroupDAO.has_member(group_id, rubbing_id)
+
+    def count_edition_groups(self) -> int:
+        return EditionGroupDAO.count()
+
+    def count_edition_relations(self) -> int:
+        return EditionRelationDAO.count()
+
+    def list_edition_relations(self) -> List[Dict[str, Any]]:
+        return EditionRelationDAO.list_all()
+
+    def get_relations_for_group(self, group_id: int) -> List[Dict[str, Any]]:
+        return EditionRelationDAO.get_by_group(group_id)
+
+    def create_edition_relation(self, data: Dict[str, Any]) -> int:
+        source_id = data.get("source_group_id")
+        target_id = data.get("target_group_id")
+        if source_id == target_id:
+            raise ValueError("不能与自身建立关系")
+        if EditionRelationDAO.exists_between(source_id, target_id):
+            raise ValueError("两个版别组之间已存在关系")
+        return EditionRelationDAO.create(data)
+
+    def update_edition_relation(self, relation_id: int, data: Dict[str, Any]) -> None:
+        EditionRelationDAO.update(relation_id, data)
+
+    def delete_edition_relation(self, relation_id: int) -> None:
+        EditionRelationDAO.delete(relation_id)
+
+    def get_edition_graph_data(self) -> Dict[str, Any]:
+        return EditionRelationDAO.get_all_graph_data()
+
+    def get_relation_types(self) -> Dict[str, str]:
+        return EditionRelationDAO.RELATION_LABELS
+
+    def can_delete_rubbing(self, rubbing_id: int) -> Tuple[bool, str]:
+        if ComparisonDAO.has_any_conclusion(rubbing_id):
+            return False, "该拓片已有对比结论，删除前请先处理相关对比记录。"
+        groups = EditionGroupDAO.get_by_rubbing(rubbing_id)
+        if groups:
+            group_names = "、".join([g.get("name", "") for g in groups])
+            return False, f"该拓片属于版别组 [{group_names}]，删除前请先从版别组中移除。"
+        return True, ""
+
+    def can_delete_edition_group(self, group_id: int) -> Tuple[bool, str]:
+        members = EditionGroupDAO.get_members(group_id)
+        if members:
+            return False, f"该版别组包含 {len(members)} 个拓片，删除前请先移除所有成员。"
+        relations = EditionRelationDAO.get_by_group(group_id)
+        if relations:
+            return False, f"该版别组有 {len(relations)} 条关系，删除前请先删除所有相关关系。"
+        return True, ""
+
+    def get_subgraph_for_group(self, group_id: int, max_depth: int = 2) -> Dict[str, Any]:
+        visited = set()
+        nodes = []
+        edges = []
+
+        def dfs(current_id, depth):
+            if current_id in visited or depth > max_depth:
+                return
+            visited.add(current_id)
+            group = EditionGroupDAO.get_by_id(current_id)
+            if group:
+                group["member_count"] = EditionGroupDAO.count_members(current_id)
+                nodes.append(group)
+            if depth < max_depth:
+                relations = EditionRelationDAO.get_by_group(current_id)
+                for rel in relations:
+                    edges.append(rel)
+                    other_id = rel["target_group_id"] if rel["source_group_id"] == current_id else rel["source_group_id"]
+                    dfs(other_id, depth + 1)
+
+        dfs(group_id, 0)
+        return {"nodes": nodes, "edges": edges}

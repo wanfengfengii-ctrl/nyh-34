@@ -106,6 +106,53 @@ CREATE TABLE IF NOT EXISTS system_settings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_settings_key ON system_settings(setting_key);
+
+CREATE TABLE IF NOT EXISTS edition_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    era TEXT,
+    inscription TEXT,
+    material TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_edition_groups_name ON edition_groups(name);
+CREATE INDEX IF NOT EXISTS idx_edition_groups_era ON edition_groups(era);
+CREATE INDEX IF NOT EXISTS idx_edition_groups_inscription ON edition_groups(inscription);
+
+CREATE TABLE IF NOT EXISTS edition_group_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    rubbing_id INTEGER NOT NULL,
+    notes TEXT,
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES edition_groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (rubbing_id) REFERENCES rubbings(id) ON DELETE CASCADE,
+    UNIQUE(group_id, rubbing_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_egm_group ON edition_group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_egm_rubbing ON edition_group_members(rubbing_id);
+
+CREATE TABLE IF NOT EXISTS edition_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_group_id INTEGER NOT NULL,
+    target_group_id INTEGER NOT NULL,
+    relation_type TEXT NOT NULL,
+    notes TEXT,
+    evidence_comparison_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_group_id) REFERENCES edition_groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_group_id) REFERENCES edition_groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (evidence_comparison_id) REFERENCES comparisons(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_er_source ON edition_relations(source_group_id);
+CREATE INDEX IF NOT EXISTS idx_er_target ON edition_relations(target_group_id);
+CREATE INDEX IF NOT EXISTS idx_er_type ON edition_relations(relation_type);
 """
 
 
@@ -682,3 +729,271 @@ class SystemSettingDAO:
     @staticmethod
     def set_bool(key: str, value: bool) -> None:
         SystemSettingDAO.set(key, "true" if value else "false")
+
+
+class EditionGroupDAO:
+    @staticmethod
+    def create(data: Dict[str, Any]) -> int:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO edition_groups
+                   (name, description, era, inscription, material)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    data.get("name"),
+                    data.get("description", ""),
+                    data.get("era", ""),
+                    data.get("inscription", ""),
+                    data.get("material", ""),
+                ),
+            )
+            return cursor.lastrowid
+
+    @staticmethod
+    def update(group_id: int, data: Dict[str, Any]) -> None:
+        fields = []
+        values = []
+        for key, val in data.items():
+            if key == "id":
+                continue
+            fields.append(f"{key} = ?")
+            values.append(val)
+        if not fields:
+            return
+        fields.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(group_id)
+        with get_db_connection() as conn:
+            conn.execute(
+                f"UPDATE edition_groups SET {', '.join(fields)} WHERE id = ?",
+                tuple(values),
+            )
+
+    @staticmethod
+    def delete(group_id: int) -> None:
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM edition_groups WHERE id = ?", (group_id,))
+
+    @staticmethod
+    def get_by_id(group_id: int) -> Optional[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM edition_groups WHERE id = ?", (group_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def list_all(
+        keyword: Optional[str] = None,
+        era: Optional[str] = None,
+        inscription: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        query = "SELECT * FROM edition_groups WHERE 1=1"
+        params: List[Any] = []
+        if keyword:
+            query += " AND (name LIKE ? OR description LIKE ?)"
+            params.extend([f"%{keyword}%"] * 2)
+        if era:
+            query += " AND era = ?"
+            params.append(era)
+        if inscription:
+            query += " AND inscription LIKE ?"
+            params.append(f"%{inscription}%")
+        query += " ORDER BY updated_at DESC"
+        with get_db_connection() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_by_rubbing(rubbing_id: int) -> List[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """SELECT eg.* FROM edition_groups eg
+                   JOIN edition_group_members egm ON eg.id = egm.group_id
+                   WHERE egm.rubbing_id = ?
+                   ORDER BY eg.name""",
+                (rubbing_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_members(group_id: int) -> List[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """SELECT r.*, egm.notes as member_notes, egm.joined_at
+                   FROM rubbings r
+                   JOIN edition_group_members egm ON r.id = egm.rubbing_id
+                   WHERE egm.group_id = ?
+                   ORDER BY r.code""",
+                (group_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def add_member(group_id: int, rubbing_id: int, notes: str = "") -> None:
+        with get_db_connection() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO edition_group_members
+                   (group_id, rubbing_id, notes)
+                   VALUES (?, ?, ?)""",
+                (group_id, rubbing_id, notes),
+            )
+
+    @staticmethod
+    def remove_member(group_id: int, rubbing_id: int) -> None:
+        with get_db_connection() as conn:
+            conn.execute(
+                "DELETE FROM edition_group_members WHERE group_id = ? AND rubbing_id = ?",
+                (group_id, rubbing_id),
+            )
+
+    @staticmethod
+    def has_member(group_id: int, rubbing_id: int) -> bool:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM edition_group_members WHERE group_id = ? AND rubbing_id = ?",
+                (group_id, rubbing_id),
+            ).fetchone()
+            return row["cnt"] > 0
+
+    @staticmethod
+    def count_members(group_id: int) -> int:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM edition_group_members WHERE group_id = ?",
+                (group_id,),
+            ).fetchone()
+            return row["cnt"]
+
+    @staticmethod
+    def count() -> int:
+        with get_db_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) as cnt FROM edition_groups").fetchone()
+            return row["cnt"]
+
+
+class EditionRelationDAO:
+    RELATION_SAME_EDITION = "same_edition"
+    RELATION_EVOLUTION = "evolution"
+    RELATION_SUSPECTED_FORGERY = "suspected_forgery"
+    RELATION_SOURCE_RELATION = "source_relation"
+
+    RELATION_LABELS = {
+        RELATION_SAME_EDITION: "同版",
+        RELATION_EVOLUTION: "演化",
+        RELATION_SUSPECTED_FORGERY: "疑似仿刻",
+        RELATION_SOURCE_RELATION: "来源关联",
+    }
+
+    @staticmethod
+    def create(data: Dict[str, Any]) -> int:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO edition_relations
+                   (source_group_id, target_group_id, relation_type,
+                    notes, evidence_comparison_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    data.get("source_group_id"),
+                    data.get("target_group_id"),
+                    data.get("relation_type"),
+                    data.get("notes", ""),
+                    data.get("evidence_comparison_id"),
+                ),
+            )
+            return cursor.lastrowid
+
+    @staticmethod
+    def update(relation_id: int, data: Dict[str, Any]) -> None:
+        fields = []
+        values = []
+        for key, val in data.items():
+            if key == "id":
+                continue
+            fields.append(f"{key} = ?")
+            values.append(val)
+        if not fields:
+            return
+        fields.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(relation_id)
+        with get_db_connection() as conn:
+            conn.execute(
+                f"UPDATE edition_relations SET {', '.join(fields)} WHERE id = ?",
+                tuple(values),
+            )
+
+    @staticmethod
+    def delete(relation_id: int) -> None:
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM edition_relations WHERE id = ?", (relation_id,))
+
+    @staticmethod
+    def get_by_id(relation_id: int) -> Optional[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM edition_relations WHERE id = ?", (relation_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def get_by_group(group_id: int) -> List[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """SELECT er.*,
+                          s.name as source_name,
+                          t.name as target_name
+                   FROM edition_relations er
+                   JOIN edition_groups s ON er.source_group_id = s.id
+                   JOIN edition_groups t ON er.target_group_id = t.id
+                   WHERE er.source_group_id = ? OR er.target_group_id = ?
+                   ORDER BY er.created_at DESC""",
+                (group_id, group_id),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def list_all() -> List[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """SELECT er.*,
+                          s.name as source_name,
+                          t.name as target_name
+                   FROM edition_relations er
+                   JOIN edition_groups s ON er.source_group_id = s.id
+                   JOIN edition_groups t ON er.target_group_id = t.id
+                   ORDER BY er.created_at DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_all_graph_data() -> Dict[str, Any]:
+        with get_db_connection() as conn:
+            groups = conn.execute(
+                """SELECT eg.*,
+                          (SELECT COUNT(*) FROM edition_group_members WHERE group_id = eg.id) as member_count
+                   FROM edition_groups eg
+                   ORDER BY eg.name"""
+            ).fetchall()
+            relations = conn.execute(
+                "SELECT * FROM edition_relations"
+            ).fetchall()
+            return {
+                "nodes": [dict(g) for g in groups],
+                "edges": [dict(r) for r in relations],
+            }
+
+    @staticmethod
+    def exists_between(group_a_id: int, group_b_id: int) -> bool:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) as cnt FROM edition_relations
+                   WHERE (source_group_id = ? AND target_group_id = ?)
+                      OR (source_group_id = ? AND target_group_id = ?)""",
+                (group_a_id, group_b_id, group_b_id, group_a_id),
+            ).fetchone()
+            return row["cnt"] > 0
+
+    @staticmethod
+    def count() -> int:
+        with get_db_connection() as conn:
+            row = conn.execute("SELECT COUNT(*) as cnt FROM edition_relations").fetchone()
+            return row["cnt"]

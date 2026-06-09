@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QTextEdit, QFormLayout, QPushButton, QGroupBox, QComboBox,
-    QMessageBox,
+    QMessageBox, QListWidget, QListWidgetItem,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
@@ -17,6 +17,8 @@ class DetailPanel(QWidget):
     deleteRequested = Signal(int)
     findSimilarRequested = Signal()
     viewComparisonsRequested = Signal()
+    viewEditionGraphRequested = Signal()
+    editionGroupChanged = Signal()
 
     def __init__(self, service: RubbingService, parent=None):
         super().__init__(parent)
@@ -96,6 +98,38 @@ class DetailPanel(QWidget):
         action2_layout.addWidget(self.btn_comparisons)
         layout.addLayout(action2_layout)
 
+        edition_box = QGroupBox("版别组")
+        edition_layout = QVBoxLayout(edition_box)
+
+        self.edition_list = QListWidget()
+        self.edition_list.setMaximumHeight(80)
+        self.edition_list.itemDoubleClicked.connect(self._on_edition_group_double_clicked)
+        edition_layout.addWidget(self.edition_list)
+
+        btn_edition_layout = QHBoxLayout()
+        self.btn_create_group = QPushButton("新建版别组")
+        self.btn_create_group.clicked.connect(self._on_create_group)
+        self.btn_create_group.setEnabled(False)
+        self.btn_join_group = QPushButton("加入版别组")
+        self.btn_join_group.clicked.connect(self._on_join_group)
+        self.btn_join_group.setEnabled(False)
+        self.btn_leave_group = QPushButton("退出选中")
+        self.btn_leave_group.clicked.connect(self._on_leave_group)
+        self.btn_leave_group.setEnabled(False)
+        btn_edition_layout.addWidget(self.btn_create_group)
+        btn_edition_layout.addWidget(self.btn_join_group)
+        btn_edition_layout.addWidget(self.btn_leave_group)
+        edition_layout.addLayout(btn_edition_layout)
+
+        btn_graph_layout = QHBoxLayout()
+        self.btn_view_graph = QPushButton("查看关系图谱")
+        self.btn_view_graph.clicked.connect(self.viewEditionGraphRequested.emit)
+        self.btn_view_graph.setEnabled(False)
+        btn_graph_layout.addWidget(self.btn_view_graph)
+        edition_layout.addLayout(btn_graph_layout)
+
+        layout.addWidget(edition_box)
+
         layout.addStretch()
 
     def set_rubbing(self, rubbing: Optional[Dict[str, Any]]):
@@ -109,6 +143,16 @@ class DetailPanel(QWidget):
 
         has_contour = has_data and rubbing.get("has_valid_contour", False)
         self.btn_similar.setEnabled(has_contour)
+
+        self.btn_create_group.setEnabled(has_data)
+        self.btn_join_group.setEnabled(has_data)
+        self.btn_view_graph.setEnabled(True)
+
+        if has_data:
+            self._load_edition_groups(rubbing["id"])
+        else:
+            self.edition_list.clear()
+            self.btn_leave_group.setEnabled(False)
 
         if not rubbing:
             self.image_label.clear()
@@ -199,3 +243,104 @@ class DetailPanel(QWidget):
                 self.era_combo.setCurrentIndex(idx)
             else:
                 self.era_combo.setCurrentText(current)
+
+    def _load_edition_groups(self, rubbing_id: int):
+        self.edition_list.clear()
+        groups = self._service.get_edition_groups_for_rubbing(rubbing_id)
+        if not groups:
+            item = QListWidgetItem("未加入任何版别组")
+            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            self.edition_list.addItem(item)
+            self.btn_leave_group.setEnabled(False)
+            return
+        for g in groups:
+            item = QListWidgetItem(g.get("name", ""))
+            item.setData(Qt.UserRole, g.get("id"))
+            self.edition_list.addItem(item)
+        self.btn_leave_group.setEnabled(True)
+
+    def _on_create_group(self):
+        if not self._current_rubbing:
+            return
+        from .edition_group_dialog import EditionGroupDialog
+        dialog = EditionGroupDialog(
+            self._service,
+            initial_rubbing_id=self._current_rubbing["id"],
+            parent=self,
+        )
+        dialog.groupUpdated.connect(self._on_edition_group_changed)
+        dialog.exec()
+
+    def _on_join_group(self):
+        if not self._current_rubbing:
+            return
+        groups = self._service.list_edition_groups()
+        if not groups:
+            QMessageBox.information(self, "提示", "暂无版别组，请先创建版别组")
+            return
+        group_names = [g.get("name", "") for g in groups]
+        group_ids = [g.get("id") for g in groups]
+        from PySide6.QtWidgets import QInputDialog
+        choice, ok = QInputDialog.getItem(
+            self, "加入版别组", "选择要加入的版别组:",
+            group_names, 0, False
+        )
+        if not ok:
+            return
+        idx = group_names.index(choice)
+        group_id = group_ids[idx]
+        if self._service.is_rubbing_in_group(group_id, self._current_rubbing["id"]):
+            QMessageBox.information(self, "提示", "该拓片已在此版别组中")
+            return
+        try:
+            self._service.add_rubbing_to_group(group_id, self._current_rubbing["id"])
+            self._load_edition_groups(self._current_rubbing["id"])
+            QMessageBox.information(self, "成功", "已加入版别组")
+            self.editionGroupChanged.emit()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"加入失败: {e}")
+
+    def _on_leave_group(self):
+        if not self._current_rubbing:
+            return
+        item = self.edition_list.currentItem()
+        if not item or not item.data(Qt.UserRole):
+            QMessageBox.information(self, "提示", "请先选择一个版别组")
+            return
+        group_id = item.data(Qt.UserRole)
+        reply = QMessageBox.question(
+            self, "确认退出",
+            f"确定要退出该版别组吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                self._service.remove_rubbing_from_group(group_id, self._current_rubbing["id"])
+                self._load_edition_groups(self._current_rubbing["id"])
+                QMessageBox.information(self, "成功", "已退出版别组")
+                self.editionGroupChanged.emit()
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"退出失败: {e}")
+
+    def _on_edition_group_changed(self):
+        if self._current_rubbing:
+            self._load_edition_groups(self._current_rubbing["id"])
+        self.editionGroupChanged.emit()
+
+    def _on_edition_group_double_clicked(self, item):
+        group_id = item.data(Qt.UserRole)
+        if not group_id:
+            return
+        from .edition_group_dialog import EditionGroupDialog
+        dialog = EditionGroupDialog(
+            self._service,
+            group_id=group_id,
+            parent=self,
+        )
+        dialog.groupUpdated.connect(self._on_edition_group_changed)
+        dialog.exec()
+
+    def refresh_edition_groups(self):
+        if self._current_rubbing:
+            self._load_edition_groups(self._current_rubbing["id"])
