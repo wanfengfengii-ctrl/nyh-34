@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (
     QGroupBox, QFormLayout, QMessageBox, QSplitter, QWidget,
     QInputDialog, QTabWidget,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QIcon
 from typing import Optional, Dict, Any, List
 
 from ..core.rubbing_service import RubbingService
@@ -89,7 +90,9 @@ class EditionGroupDialog(QDialog):
         members_layout.addLayout(member_toolbar)
 
         self.members_list = QListWidget()
-        self.members_list.setIconSize(self.members_list.iconSize())
+        self.members_list.setIconSize(QSize(60, 60))
+        self.members_list.setUniformItemSizes(False)
+        self.members_list.setViewMode(QListWidget.ListMode)
         members_layout.addWidget(self.members_list, 1)
 
         self.member_count_label = QLabel("共 0 个拓片")
@@ -180,12 +183,13 @@ class EditionGroupDialog(QDialog):
             display_text = f"{m.get('code', '')}\n{m.get('era', '—')} · {m.get('inscription', '—')}"
             item.setText(display_text)
             item.setData(Qt.UserRole, m.get("id"))
+            item.setSizeHint(QSize(0, 70))
 
             img_path = m.get("processed_path") or m.get("original_path")
             if img_path:
-                pixmap = load_pixmap_from_path(img_path, 40, 40)
+                pixmap = load_pixmap_from_path(img_path, 60, 60)
                 if not pixmap.isNull():
-                    item.setIcon(pixmap)
+                    item.setIcon(QIcon(pixmap))
 
             self.members_list.addItem(item)
         self.member_count_label.setText(f"共 {len(members)} 个拓片")
