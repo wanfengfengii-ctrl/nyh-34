@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QLabel, QPushButton, QMessageBox, QInputDialog,
     QComboBox,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from typing import Optional, Dict, Any, List
 
@@ -67,7 +67,9 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.contour_only_cb)
 
         self.rubbing_list = QListWidget()
-        self.rubbing_list.setIconSize(self.rubbing_list.iconSize())
+        self.rubbing_list.setIconSize(QSize(72, 72))
+        self.rubbing_list.setUniformItemSizes(True)
+        self.rubbing_list.setGridSize(QSize(0, 80))
         self.rubbing_list.itemSelectionChanged.connect(
             self._on_rubbing_selected
         )
@@ -117,15 +119,17 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        act_edit = QAction("编辑图片", self)
-        act_edit.triggered.connect(self._on_edit_image)
-        toolbar.addAction(act_edit)
+        self.act_edit = QAction("编辑图片", self)
+        self.act_edit.triggered.connect(self._on_edit_image)
+        self.act_edit.setEnabled(False)
+        toolbar.addAction(self.act_edit)
 
         toolbar.addSeparator()
 
-        act_match = QAction("查找相似", self)
-        act_match.triggered.connect(self._on_find_similar)
-        toolbar.addAction(act_match)
+        self.act_match = QAction("查找相似", self)
+        self.act_match.triggered.connect(self._on_find_similar)
+        self.act_match.setEnabled(False)
+        toolbar.addAction(self.act_match)
 
         act_compare_hist = QAction("对比记录", self)
         act_compare_hist.triggered.connect(self._on_view_all_comparisons)
@@ -200,6 +204,8 @@ class MainWindow(QMainWindow):
             self._current_rubbing = None
             self.detail_panel.set_rubbing(None)
             self.similarity_panel.set_target_rubbing(None)
+            self.act_edit.setEnabled(False)
+            self.act_match.setEnabled(False)
             return
         item = items[0]
         rubbing_id = item.data(Qt.UserRole)
@@ -207,6 +213,8 @@ class MainWindow(QMainWindow):
         self._current_rubbing = rubbing
         self.detail_panel.set_rubbing(rubbing)
         self.similarity_panel.set_target_rubbing(rubbing)
+        self.act_edit.setEnabled(True)
+        self.act_match.setEnabled(rubbing.get("has_valid_contour", False))
 
     def _on_rubbing_double_clicked(self, item: QListWidgetItem):
         pass

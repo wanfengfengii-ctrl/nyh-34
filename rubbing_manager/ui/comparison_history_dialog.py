@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QComboBox, QMessageBox, QSplitter, QWidget,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QColor
 from typing import List, Dict, Any, Optional
 
 from ..core.rubbing_service import RubbingService
@@ -151,7 +151,7 @@ class ComparisonHistoryDialog(QDialog):
             item.setData(Qt.UserRole, comp)
 
             color = CONCLUSION_COLORS.get(conclusion, "#000")
-            item.setForeground(Qt.GlobalColor.gray)
+            item.setForeground(QColor(color))
             if conclusion != ComparisonDAO.CONCLUSION_UNCONFIRMED:
                 f = item.font()
                 f.setBold(True)

@@ -105,8 +105,10 @@ class DetailPanel(QWidget):
         self.btn_edit_image.setEnabled(has_data)
         self.btn_save.setEnabled(has_data)
         self.btn_delete.setEnabled(has_data)
-        self.btn_similar.setEnabled(has_data)
         self.btn_comparisons.setEnabled(has_data)
+
+        has_contour = has_data and rubbing.get("has_valid_contour", False)
+        self.btn_similar.setEnabled(has_contour)
 
         if not rubbing:
             self.image_label.clear()

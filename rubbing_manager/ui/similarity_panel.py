@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QGroupBox, QSplitter,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap
 from typing import List, Dict, Any, Optional
 
@@ -33,8 +33,10 @@ class SimilarityPanel(QWidget):
         layout.addWidget(self.info_label)
 
         self.result_list = QListWidget()
+        self.result_list.setItemAlignment(Qt.AlignLeft)
+        self.result_list.setIconSize(QSize(64, 64))
+        self.result_list.setUniformItemSizes(True)
         self.result_list.itemDoubleClicked.connect(self._on_item_double_clicked)
-        self.result_list.setIconSize(self.result_list.iconSize())
         layout.addWidget(self.result_list, 1)
 
         btn_layout = QHBoxLayout()
