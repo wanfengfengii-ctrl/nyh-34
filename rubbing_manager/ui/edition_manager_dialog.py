@@ -12,6 +12,7 @@ from ..db.database import EditionRelationDAO
 from .edition_graph_widget import EditionGraphWidget
 from .edition_group_dialog import EditionGroupDialog
 from .edition_relation_dialog import EditionRelationDialog
+from .report_dialog import ReportDialog
 from .utils import load_pixmap_from_path
 
 
@@ -61,6 +62,13 @@ class EditionManagerDialog(QDialog):
 
         toolbar.addStretch()
 
+        self.btn_export_report = QPushButton("导出版别组报告")
+        self.btn_export_report.clicked.connect(self._on_export_report)
+        self.btn_export_report.setEnabled(False)
+        toolbar.addWidget(self.btn_export_report)
+
+        toolbar.addSpacing(20)
+
         stats_label = QLabel()
         self.stats_label = stats_label
         toolbar.addWidget(stats_label)
@@ -91,6 +99,7 @@ class EditionManagerDialog(QDialog):
         self.graph_widget = EditionGraphWidget(self._service)
         self.graph_widget.groupSelected.connect(self._on_graph_group_selected)
         self.graph_widget.groupDoubleClicked.connect(self._on_graph_group_double_clicked)
+        self.graph_widget.rubbingDoubleClicked.connect(self._on_graph_rubbing_double_clicked)
         center_layout.addWidget(self.graph_widget, 1)
 
         splitter.addWidget(center_panel)
@@ -161,6 +170,7 @@ class EditionManagerDialog(QDialog):
         has_selection = self.group_list.currentItem() is not None
         self.btn_edit_group.setEnabled(has_selection)
         self.btn_delete_group.setEnabled(has_selection)
+        self.btn_export_report.setEnabled(has_selection)
 
     def _refresh_relation_list(self):
         self.relation_list.clear()
@@ -218,6 +228,10 @@ class EditionManagerDialog(QDialog):
 
     def _on_graph_group_double_clicked(self, group_id: int):
         self._edit_group(group_id)
+
+    def _on_graph_rubbing_double_clicked(self, rubbing_id: int):
+        self.rubbingSelected.emit(rubbing_id)
+        self.accept()
 
     def _on_new_group(self):
         dialog = EditionGroupDialog(self._service, parent=self)
@@ -320,3 +334,16 @@ class EditionManagerDialog(QDialog):
                 self.group_list.setCurrentItem(item)
                 break
         self.graph_widget.focus_on_group(group_id)
+
+    def _on_export_report(self):
+        group_id = self._get_selected_group_id()
+        if not group_id:
+            QMessageBox.information(self, "提示", "请先选择一个版别组")
+            return
+        dialog = ReportDialog(
+            self._service,
+            mode="group",
+            group_id=group_id,
+            parent=self,
+        )
+        dialog.exec()

@@ -19,6 +19,7 @@ from .batch_import_dialog import BatchImportDialog
 from .comparison_history_dialog import ComparisonHistoryDialog
 from .feedback_history_dialog import FeedbackHistoryDialog
 from .edition_manager_dialog import EditionManagerDialog
+from .report_dialog import ReportDialog
 from .utils import load_pixmap_from_path
 
 
@@ -152,6 +153,7 @@ class MainWindow(QMainWindow):
         self.detail_panel.viewComparisonsRequested.connect(self._on_view_comparisons)
         self.detail_panel.viewEditionGraphRequested.connect(self._on_view_edition_graph_from_detail)
         self.detail_panel.editionGroupChanged.connect(self._on_edition_group_changed)
+        self.detail_panel.exportReportRequested.connect(self._on_export_single_report)
         center_layout.addWidget(self.detail_panel, 1)
         splitter.addWidget(center_panel)
 
@@ -205,6 +207,12 @@ class MainWindow(QMainWindow):
         act_edition = QAction("版别关系图谱", self)
         act_edition.triggered.connect(self._on_view_edition_graph)
         toolbar.addAction(act_edition)
+
+        toolbar.addSeparator()
+
+        act_report = QAction("导出报告", self)
+        act_report.triggered.connect(self._on_export_report)
+        toolbar.addAction(act_report)
 
         toolbar.addSeparator()
 
@@ -501,10 +509,12 @@ class MainWindow(QMainWindow):
 
     def _on_view_edition_graph(self):
         dialog = EditionManagerDialog(self._service, self)
+        dialog.rubbingSelected.connect(self._select_rubbing_by_id)
         dialog.exec()
 
     def _on_view_edition_graph_from_detail(self):
         dialog = EditionManagerDialog(self._service, self)
+        dialog.rubbingSelected.connect(self._select_rubbing_by_id)
         if self._current_rubbing:
             groups = self._service.get_edition_groups_for_rubbing(
                 self._current_rubbing["id"]
@@ -513,8 +523,40 @@ class MainWindow(QMainWindow):
                 dialog.focus_on_group(groups[0]["id"])
         dialog.exec()
 
+    def _select_rubbing_by_id(self, rubbing_id: int):
+        for i in range(self.rubbing_list.count()):
+            item = self.rubbing_list.item(i)
+            if item.data(Qt.UserRole) == rubbing_id:
+                self.rubbing_list.setCurrentRow(i)
+                break
+
     def _on_edition_group_changed(self):
         self.statusBar().showMessage("版别组信息已更新", 3000)
+
+    def _on_export_report(self):
+        dialog = ReportDialog(self._service, mode="single", parent=self)
+        if self._current_rubbing:
+            dialog = ReportDialog(
+                self._service,
+                mode="single",
+                rubbing_id=self._current_rubbing["id"],
+                parent=self,
+            )
+        dialog.reportExported.connect(self._on_report_exported)
+        dialog.exec()
+
+    def _on_export_single_report(self, rubbing_id: int):
+        dialog = ReportDialog(
+            self._service,
+            mode="single",
+            rubbing_id=rubbing_id,
+            parent=self,
+        )
+        dialog.reportExported.connect(self._on_report_exported)
+        dialog.exec()
+
+    def _on_report_exported(self, file_path: str):
+        self.statusBar().showMessage(f"报告已导出: {file_path}", 5000)
 
     def _on_about(self):
         QMessageBox.about(

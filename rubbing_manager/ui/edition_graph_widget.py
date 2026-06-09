@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QSplitter, QMessageBox,
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QLineF
-from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter
+from PySide6.QtGui import QPen, QBrush, QColor, QFont, QPainter, QPixmap
 from typing import List, Dict, Any, Optional
 import math
 
@@ -255,10 +255,24 @@ class EditionGraphView(QGraphicsView):
             return self._selected_node.group_id()
         return None
 
+    def grab_graph_image(self) -> Optional[QPixmap]:
+        if not self._scene or self._scene.itemsBoundingRect().isEmpty():
+            return None
+        rect = self._scene.itemsBoundingRect().adjusted(-50, -50, 50, 50)
+        pixmap = QPixmap(rect.size().toSize())
+        pixmap.fill(QColor("#f8f9fa"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        self._scene.render(painter, pixmap.rect(), rect)
+        painter.end()
+        return pixmap
+
 
 class EditionGraphWidget(QWidget):
     groupDoubleClicked = Signal(int)
     groupSelected = Signal(int)
+    rubbingDoubleClicked = Signal(int)
 
     def __init__(self, service: RubbingService, parent=None):
         super().__init__(parent)
@@ -419,9 +433,12 @@ class EditionGraphWidget(QWidget):
     def _on_member_double_clicked(self, item: QListWidgetItem):
         rubbing_id = item.data(Qt.UserRole)
         if rubbing_id:
-            self.groupDoubleClicked.emit(rubbing_id)
+            self.rubbingDoubleClicked.emit(rubbing_id)
 
     def focus_on_group(self, group_id: int):
         idx = self.focus_combo.findData(group_id)
         if idx >= 0:
             self.focus_combo.setCurrentIndex(idx)
+
+    def grab_graph_image(self) -> Optional[QPixmap]:
+        return self.graph_view.grab_graph_image()
