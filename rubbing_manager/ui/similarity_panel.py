@@ -1,17 +1,20 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QGroupBox, QSplitter,
+    QMessageBox,
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap
 from typing import List, Dict, Any, Optional
 
 from ..core.rubbing_service import RubbingService
+from ..db.database import SimilarityFeedbackDAO
 from .utils import load_pixmap_from_path
 
 
 class SimilarityPanel(QWidget):
     compareRequested = Signal(int, int)
+    feedbackSubmitted = Signal()
 
     def __init__(self, service: RubbingService, parent=None):
         super().__init__(parent)
@@ -26,6 +29,11 @@ class SimilarityPanel(QWidget):
         header = QLabel("相似拓片推荐")
         header.setStyleSheet("font-size: 14px; font-weight: bold; padding: 4px;")
         layout.addWidget(header)
+
+        self.weight_label = QLabel()
+        self.weight_label.setStyleSheet("color: #666; font-size: 11px; padding: 2px 8px;")
+        self._update_weight_display()
+        layout.addWidget(self.weight_label)
 
         self.info_label = QLabel("请选择一个拓片以查找相似拓片")
         self.info_label.setStyleSheet("color: #666; padding: 8px;")
@@ -49,11 +57,33 @@ class SimilarityPanel(QWidget):
         btn_layout.addWidget(self.btn_compare)
         layout.addLayout(btn_layout)
 
-        self.result_list.currentItemChanged.connect(
-            lambda: self.btn_compare.setEnabled(
-                self.result_list.currentItem() is not None
-            )
+        feedback_box = QGroupBox("反馈")
+        feedback_layout = QHBoxLayout(feedback_box)
+        self.btn_correct = QPushButton("✓ 推荐正确")
+        self.btn_correct.setStyleSheet("background: #2ecc71; color: white; padding: 6px;")
+        self.btn_correct.clicked.connect(lambda: self._on_feedback("correct"))
+        self.btn_correct.setEnabled(False)
+        self.btn_wrong = QPushButton("✗ 推荐错误")
+        self.btn_wrong.setStyleSheet("background: #e74c3c; color: white; padding: 6px;")
+        self.btn_wrong.clicked.connect(lambda: self._on_feedback("wrong"))
+        self.btn_wrong.setEnabled(False)
+        feedback_layout.addWidget(self.btn_correct)
+        feedback_layout.addWidget(self.btn_wrong)
+        layout.addWidget(feedback_box)
+
+        self.result_list.currentItemChanged.connect(self._on_selection_changed)
+
+    def _update_weight_display(self):
+        contour_w, texture_w = self._service.get_current_weights()
+        self.weight_label.setText(
+            f"当前权重 - 轮廓: {contour_w:.1%} | 纹理: {texture_w:.1%}"
         )
+
+    def _on_selection_changed(self):
+        has_selection = self.result_list.currentItem() is not None
+        self.btn_compare.setEnabled(has_selection)
+        self.btn_correct.setEnabled(has_selection)
+        self.btn_wrong.setEnabled(has_selection)
 
     def set_target_rubbing(self, rubbing: Optional[Dict[str, Any]]):
         self._target_rubbing = rubbing
@@ -73,6 +103,9 @@ class SimilarityPanel(QWidget):
             self.btn_match.setEnabled(False)
         self._results = []
         self.result_list.clear()
+        self.btn_correct.setEnabled(False)
+        self.btn_wrong.setEnabled(False)
+        self._update_weight_display()
 
     def _do_match(self):
         if not self._target_rubbing:
@@ -81,6 +114,7 @@ class SimilarityPanel(QWidget):
         results = self._service.find_similar(rubbing_id, top_k=20)
         self._results = results
         self._populate_results(results)
+        self._update_weight_display()
 
     def _populate_results(self, results: List[Dict[str, Any]]):
         self.result_list.clear()
@@ -120,6 +154,39 @@ class SimilarityPanel(QWidget):
             data = item.data(Qt.UserRole)
             self.compareRequested.emit(self._target_rubbing["id"], data["id"])
 
+    def _on_feedback(self, feedback_type: str):
+        item = self.result_list.currentItem()
+        if not item or not self._target_rubbing:
+            return
+
+        data = item.data(Qt.UserRole)
+        if not data:
+            return
+
+        target_id = data["id"]
+        source_id = self._target_rubbing["id"]
+        contour_sim = data.get("contour_similarity", 0) / 100.0
+        texture_sim = data.get("texture_similarity", 0) / 100.0
+        overall_sim = data.get("similarity_score", 0) / 100.0
+
+        try:
+            self._service.add_feedback(
+                source_rubbing_id=source_id,
+                target_rubbing_id=target_id,
+                feedback_type=feedback_type,
+                contour_similarity=contour_sim,
+                texture_similarity=texture_sim,
+                overall_similarity=overall_sim,
+            )
+            msg = "已标记为推荐正确" if feedback_type == "correct" else "已标记为推荐错误"
+            QMessageBox.information(self, "反馈成功", msg)
+            self.feedbackSubmitted.emit()
+            self._update_weight_display()
+            self._do_match()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"反馈提交失败: {e}")
+
     def refresh(self):
         if self._target_rubbing:
             self._do_match()
+            self._update_weight_display()

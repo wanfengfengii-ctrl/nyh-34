@@ -139,8 +139,42 @@ def compute_similarity(
 
 
 class SimilarityMatcher:
-    def __init__(self, threshold: float = 0.3):
+    def __init__(
+        self,
+        threshold: float = 0.3,
+        contour_weight: float = 0.4,
+        texture_weight: float = 0.6,
+    ):
         self.threshold = threshold
+        self.contour_weight = contour_weight
+        self.texture_weight = texture_weight
+
+    def set_weights(self, contour_weight: float, texture_weight: float) -> None:
+        self.contour_weight = contour_weight
+        self.texture_weight = texture_weight
+
+    def get_weights(self) -> Tuple[float, float]:
+        return self.contour_weight, self.texture_weight
+
+    def compute_weighted_similarity(
+        self,
+        feat_a_contour: Optional[bytes],
+        feat_a_texture: Optional[bytes],
+        feat_b_contour: Optional[bytes],
+        feat_b_texture: Optional[bytes],
+    ) -> Tuple[float, float, float]:
+        contour_a = blob_to_array(feat_a_contour) if feat_a_contour else None
+        contour_b = blob_to_array(feat_b_contour) if feat_b_contour else None
+        texture_a = blob_to_array(feat_a_texture) if feat_a_texture else None
+        texture_b = blob_to_array(feat_b_texture) if feat_b_texture else None
+
+        contour_sim = cosine_similarity(contour_a, contour_b)
+        texture_sim = cosine_similarity(texture_a, texture_b)
+        overall = compute_overall_similarity(
+            contour_sim, texture_sim,
+            self.contour_weight, self.texture_weight
+        )
+        return overall, contour_sim, texture_sim
 
     def find_similar(
         self,
@@ -159,7 +193,7 @@ class SimilarityMatcher:
         for item in all_items:
             if item["id"] == target_id:
                 continue
-            overall, contour_sim, texture_sim = compute_similarity(
+            overall, contour_sim, texture_sim = self.compute_weighted_similarity(
                 target.get("contour_feature"),
                 target.get("texture_feature"),
                 item.get("contour_feature"),
@@ -172,6 +206,8 @@ class SimilarityMatcher:
                     "similarity_score": round(overall * 100, 2),
                     "contour_similarity": round(contour_sim * 100, 2),
                     "texture_similarity": round(texture_sim * 100, 2),
+                    "contour_weight": self.contour_weight,
+                    "texture_weight": self.texture_weight,
                 })
         results.sort(key=lambda x: x["similarity_score"], reverse=True)
         return results[:top_k]

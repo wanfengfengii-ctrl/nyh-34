@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS rubbings (
 CREATE INDEX IF NOT EXISTS idx_rubbings_code ON rubbings(code);
 CREATE INDEX IF NOT EXISTS idx_rubbings_era ON rubbings(era);
 CREATE INDEX IF NOT EXISTS idx_rubbings_hash ON rubbings(file_hash);
+CREATE INDEX IF NOT EXISTS idx_rubbings_inscription ON rubbings(inscription);
+CREATE INDEX IF NOT EXISTS idx_rubbings_material ON rubbings(material);
+CREATE INDEX IF NOT EXISTS idx_rubbings_excavation ON rubbings(excavation_site);
 
 CREATE TABLE IF NOT EXISTS comparisons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +66,46 @@ CREATE TABLE IF NOT EXISTS import_records (
 
 CREATE INDEX IF NOT EXISTS idx_import_status ON import_records(status);
 CREATE INDEX IF NOT EXISTS idx_import_batch ON import_records(batch_id);
+
+CREATE TABLE IF NOT EXISTS similarity_feedbacks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_rubbing_id INTEGER NOT NULL,
+    target_rubbing_id INTEGER NOT NULL,
+    feedback_type TEXT NOT NULL,
+    contour_similarity REAL,
+    texture_similarity REAL,
+    overall_similarity REAL,
+    contour_weight_at_time REAL,
+    texture_weight_at_time REAL,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_rubbing_id) REFERENCES rubbings(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_rubbing_id) REFERENCES rubbings(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_source ON similarity_feedbacks(source_rubbing_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_target ON similarity_feedbacks(target_rubbing_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_type ON similarity_feedbacks(feedback_type);
+
+CREATE TABLE IF NOT EXISTS weight_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contour_weight REAL NOT NULL,
+    texture_weight REAL NOT NULL,
+    adjustment_reason TEXT,
+    feedback_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_weight_history_time ON weight_history(created_at);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setting_key TEXT UNIQUE NOT NULL,
+    setting_value TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_settings_key ON system_settings(setting_key);
 """
 
 
@@ -206,6 +249,12 @@ class RubbingDAO:
         era: Optional[str] = None,
         keyword: Optional[str] = None,
         has_contour_only: bool = False,
+        material: Optional[str] = None,
+        inscription: Optional[str] = None,
+        excavation_site: Optional[str] = None,
+        min_similarity: Optional[float] = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
     ) -> List[Dict[str, Any]]:
         query = "SELECT * FROM rubbings WHERE 1=1"
         params: List[Any] = []
@@ -213,13 +262,63 @@ class RubbingDAO:
             query += " AND era = ?"
             params.append(era)
         if keyword:
-            query += " AND (code LIKE ? OR inscription LIKE ? OR excavation_site LIKE ?)"
-            params.extend([f"%{keyword}%"] * 3)
+            query += " AND (code LIKE ? OR inscription LIKE ? OR excavation_site LIKE ? OR material LIKE ? OR notes LIKE ?)"
+            params.extend([f"%{keyword}%"] * 5)
+        if material:
+            query += " AND material LIKE ?"
+            params.append(f"%{material}%")
+        if inscription:
+            query += " AND inscription LIKE ?"
+            params.append(f"%{inscription}%")
+        if excavation_site:
+            query += " AND excavation_site LIKE ?"
+            params.append(f"%{excavation_site}%")
         if has_contour_only:
             query += " AND has_valid_contour = 1"
-        query += " ORDER BY created_at DESC"
+
+        sort_column = "created_at"
+        if sort_by in ["code", "era", "inscription", "material", "excavation_site", "created_at", "updated_at"]:
+            sort_column = sort_by
+        sort_dir = "DESC" if sort_order.lower() == "desc" else "ASC"
+        query += f" ORDER BY {sort_column} {sort_dir}"
+
         with get_db_connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_all_materials() -> List[str]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT material FROM rubbings WHERE material IS NOT NULL AND material != '' ORDER BY material"
+            ).fetchall()
+            return [r["material"] for r in rows]
+
+    @staticmethod
+    def get_all_excavation_sites() -> List[str]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT excavation_site FROM rubbings WHERE excavation_site IS NOT NULL AND excavation_site != '' ORDER BY excavation_site"
+            ).fetchall()
+            return [r["excavation_site"] for r in rows]
+
+    @staticmethod
+    def fuzzy_search_inscription(partial_text: str) -> List[Dict[str, Any]]:
+        if not partial_text:
+            return []
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM rubbings 
+                   WHERE inscription LIKE ? 
+                   ORDER BY 
+                       CASE WHEN inscription = ? THEN 0
+                            WHEN inscription LIKE ? THEN 1
+                            WHEN inscription LIKE ? THEN 2
+                            ELSE 3 END,
+                       inscription
+                   LIMIT 50""",
+                (f"%{partial_text}%", partial_text, f"{partial_text}%", f"%{partial_text}%"),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     @staticmethod
@@ -363,3 +462,215 @@ class ImportRecordDAO:
                 (batch_id, ImportRecordDAO.STATUS_SUCCESS),
             ).fetchall()
             return [dict(r) for r in rows]
+
+
+class SimilarityFeedbackDAO:
+    FEEDBACK_CORRECT = "correct"
+    FEEDBACK_WRONG = "wrong"
+
+    @staticmethod
+    def create(data: Dict[str, Any]) -> int:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO similarity_feedbacks
+                   (source_rubbing_id, target_rubbing_id, feedback_type,
+                    contour_similarity, texture_similarity, overall_similarity,
+                    contour_weight_at_time, texture_weight_at_time, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    data.get("source_rubbing_id"),
+                    data.get("target_rubbing_id"),
+                    data.get("feedback_type"),
+                    data.get("contour_similarity"),
+                    data.get("texture_similarity"),
+                    data.get("overall_similarity"),
+                    data.get("contour_weight_at_time"),
+                    data.get("texture_weight_at_time"),
+                    data.get("notes", ""),
+                ),
+            )
+            return cursor.lastrowid
+
+    @staticmethod
+    def get_by_id(feedback_id: int) -> Optional[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM similarity_feedbacks WHERE id = ?", (feedback_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def get_by_rubbing(rubbing_id: int) -> List[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """SELECT f.*,
+                          rs.code as source_code,
+                          rt.code as target_code
+                   FROM similarity_feedbacks f
+                   JOIN rubbings rs ON f.source_rubbing_id = rs.id
+                   JOIN rubbings rt ON f.target_rubbing_id = rt.id
+                   WHERE f.source_rubbing_id = ? OR f.target_rubbing_id = ?
+                   ORDER BY f.created_at DESC""",
+                (rubbing_id, rubbing_id),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def list_all(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """SELECT f.*,
+                          rs.code as source_code,
+                          rt.code as target_code
+                   FROM similarity_feedbacks f
+                   JOIN rubbings rs ON f.source_rubbing_id = rs.id
+                   JOIN rubbings rt ON f.target_rubbing_id = rt.id
+                   ORDER BY f.created_at DESC
+                   LIMIT ? OFFSET ?""",
+                (limit, offset),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def count_by_type(feedback_type: Optional[str] = None) -> int:
+        with get_db_connection() as conn:
+            if feedback_type:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM similarity_feedbacks WHERE feedback_type = ?",
+                    (feedback_type,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM similarity_feedbacks"
+                ).fetchone()
+            return row["cnt"]
+
+    @staticmethod
+    def get_statistics() -> Dict[str, Any]:
+        with get_db_connection() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) as cnt FROM similarity_feedbacks"
+            ).fetchone()["cnt"]
+            correct = conn.execute(
+                "SELECT COUNT(*) as cnt FROM similarity_feedbacks WHERE feedback_type = ?",
+                (SimilarityFeedbackDAO.FEEDBACK_CORRECT,),
+            ).fetchone()["cnt"]
+            wrong = conn.execute(
+                "SELECT COUNT(*) as cnt FROM similarity_feedbacks WHERE feedback_type = ?",
+                (SimilarityFeedbackDAO.FEEDBACK_WRONG,),
+            ).fetchone()["cnt"]
+            return {
+                "total": total,
+                "correct": correct,
+                "wrong": wrong,
+                "accuracy": round(correct / total * 100, 2) if total > 0 else 0,
+            }
+
+
+class WeightHistoryDAO:
+    @staticmethod
+    def create(data: Dict[str, Any]) -> int:
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO weight_history
+                   (contour_weight, texture_weight, adjustment_reason, feedback_count)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    data.get("contour_weight"),
+                    data.get("texture_weight"),
+                    data.get("adjustment_reason", ""),
+                    data.get("feedback_count", 0),
+                ),
+            )
+            return cursor.lastrowid
+
+    @staticmethod
+    def get_latest() -> Optional[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM weight_history ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    @staticmethod
+    def list_all(limit: int = 100) -> List[Dict[str, Any]]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM weight_history ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    def get_current_weights() -> Tuple[float, float]:
+        latest = WeightHistoryDAO.get_latest()
+        if latest:
+            return latest["contour_weight"], latest["texture_weight"]
+        return 0.4, 0.6
+
+
+class SystemSettingDAO:
+    KEY_CONTOUR_WEIGHT = "contour_weight"
+    KEY_TEXTURE_WEIGHT = "texture_weight"
+    KEY_WEIGHT_ADJUSTMENT_ENABLED = "weight_adjustment_enabled"
+    KEY_FEEDBACKS_SINCE_ADJUSTMENT = "feedbacks_since_adjustment"
+
+    @staticmethod
+    def get(key: str, default: Optional[str] = None) -> Optional[str]:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT setting_value FROM system_settings WHERE setting_key = ?",
+                (key,),
+            ).fetchone()
+            return row["setting_value"] if row else default
+
+    @staticmethod
+    def set(key: str, value: str) -> None:
+        with get_db_connection() as conn:
+            conn.execute(
+                """INSERT INTO system_settings (setting_key, setting_value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(setting_key) DO UPDATE SET
+                       setting_value = excluded.setting_value,
+                       updated_at = CURRENT_TIMESTAMP""",
+                (key, value),
+            )
+
+    @staticmethod
+    def get_float(key: str, default: float = 0.0) -> float:
+        val = SystemSettingDAO.get(key)
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def set_float(key: str, value: float) -> None:
+        SystemSettingDAO.set(key, str(value))
+
+    @staticmethod
+    def get_int(key: str, default: int = 0) -> int:
+        val = SystemSettingDAO.get(key)
+        if val is None:
+            return default
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def set_int(key: str, value: int) -> None:
+        SystemSettingDAO.set(key, str(value))
+
+    @staticmethod
+    def get_bool(key: str, default: bool = False) -> bool:
+        val = SystemSettingDAO.get(key)
+        if val is None:
+            return default
+        return val.lower() in ("true", "1", "yes")
+
+    @staticmethod
+    def set_bool(key: str, value: bool) -> None:
+        SystemSettingDAO.set(key, "true" if value else "false")

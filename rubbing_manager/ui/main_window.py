@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QListWidget, QListWidgetItem, QToolBar, QStatusBar, QFileDialog,
     QLineEdit, QLabel, QPushButton, QMessageBox, QInputDialog,
-    QComboBox,
+    QComboBox, QGroupBox, QFormLayout, QCheckBox,
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QIcon, QPixmap
@@ -16,6 +16,7 @@ from .image_editor_dialog import ImageEditorDialog
 from .compare_dialog import CompareDialog
 from .batch_import_dialog import BatchImportDialog
 from .comparison_history_dialog import ComparisonHistoryDialog
+from .feedback_history_dialog import FeedbackHistoryDialog
 from .utils import load_pixmap_from_path
 
 
@@ -48,23 +49,72 @@ class MainWindow(QMainWindow):
 
         search_layout = QHBoxLayout()
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("搜索编号/钱文/出土地...")
+        self.search_edit.setPlaceholderText("模糊搜索编号/钱文/出土地/材质...")
         self.search_edit.textChanged.connect(self._on_search_changed)
         search_layout.addWidget(self.search_edit)
         left_layout.addLayout(search_layout)
 
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("年代:"))
+        self.advanced_filter_btn = QPushButton("▼ 高级筛选")
+        self.advanced_filter_btn.setCheckable(True)
+        self.advanced_filter_btn.toggled.connect(self._toggle_advanced_filters)
+        left_layout.addWidget(self.advanced_filter_btn)
+
+        self.advanced_filter_widget = QWidget()
+        advanced_layout = QVBoxLayout(self.advanced_filter_widget)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+
+        filter_form = QFormLayout()
+
         self.era_filter = QComboBox()
         self.era_filter.addItem("全部", "")
         self.era_filter.currentIndexChanged.connect(self._on_filter_changed)
-        filter_layout.addWidget(self.era_filter, 1)
-        left_layout.addLayout(filter_layout)
+        filter_form.addRow("年代:", self.era_filter)
 
-        self.contour_only_cb = QPushButton("仅显示有轮廓")
-        self.contour_only_cb.setCheckable(True)
+        self.material_filter = QComboBox()
+        self.material_filter.addItem("全部", "")
+        self.material_filter.setEditable(True)
+        self.material_filter.currentIndexChanged.connect(self._on_filter_changed)
+        self.material_filter.editTextChanged.connect(self._on_filter_changed)
+        filter_form.addRow("材质:", self.material_filter)
+
+        self.inscription_filter = QLineEdit()
+        self.inscription_filter.setPlaceholderText("钱文模糊搜索...")
+        self.inscription_filter.textChanged.connect(self._on_filter_changed)
+        filter_form.addRow("钱文:", self.inscription_filter)
+
+        self.excavation_filter = QComboBox()
+        self.excavation_filter.addItem("全部", "")
+        self.excavation_filter.setEditable(True)
+        self.excavation_filter.currentIndexChanged.connect(self._on_filter_changed)
+        self.excavation_filter.editTextChanged.connect(self._on_filter_changed)
+        filter_form.addRow("出土地:", self.excavation_filter)
+
+        advanced_layout.addLayout(filter_form)
+
+        sort_layout = QHBoxLayout()
+        sort_layout.addWidget(QLabel("排序:"))
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("创建时间", "created_at")
+        self.sort_combo.addItem("编号", "code")
+        self.sort_combo.addItem("年代", "era")
+        self.sort_combo.addItem("钱文", "inscription")
+        self.sort_combo.addItem("材质", "material")
+        self.sort_combo.currentIndexChanged.connect(self._on_filter_changed)
+        sort_layout.addWidget(self.sort_combo, 1)
+
+        self.sort_order_btn = QPushButton("降序 ↓")
+        self.sort_order_btn.setCheckable(True)
+        self.sort_order_btn.setChecked(True)
+        self.sort_order_btn.toggled.connect(self._on_sort_order_changed)
+        sort_layout.addWidget(self.sort_order_btn)
+        advanced_layout.addLayout(sort_layout)
+
+        self.contour_only_cb = QCheckBox("仅显示有有效轮廓")
         self.contour_only_cb.toggled.connect(self._on_filter_changed)
-        left_layout.addWidget(self.contour_only_cb)
+        advanced_layout.addWidget(self.contour_only_cb)
+
+        self.advanced_filter_widget.setVisible(False)
+        left_layout.addWidget(self.advanced_filter_widget)
 
         self.rubbing_list = QListWidget()
         self.rubbing_list.setIconSize(QSize(72, 72))
@@ -97,6 +147,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_panel)
         self.similarity_panel = SimilarityPanel(self._service)
         self.similarity_panel.compareRequested.connect(self._on_compare_requested)
+        self.similarity_panel.feedbackSubmitted.connect(self._on_feedback_submitted)
         right_layout.addWidget(self.similarity_panel, 1)
         splitter.addWidget(right_panel)
 
@@ -135,6 +186,10 @@ class MainWindow(QMainWindow):
         act_compare_hist.triggered.connect(self._on_view_all_comparisons)
         toolbar.addAction(act_compare_hist)
 
+        act_feedback = QAction("反馈与权重", self)
+        act_feedback.triggered.connect(self._on_view_feedback)
+        toolbar.addAction(act_feedback)
+
         toolbar.addSeparator()
 
         act_about = QAction("关于", self)
@@ -148,12 +203,22 @@ class MainWindow(QMainWindow):
     def _load_rubbings(self):
         keyword = self.search_edit.text().strip() if hasattr(self, 'search_edit') else ""
         era = self.era_filter.currentData() if hasattr(self, 'era_filter') else ""
+        material = self.material_filter.currentText().strip() if hasattr(self, 'material_filter') else ""
+        inscription = self.inscription_filter.text().strip() if hasattr(self, 'inscription_filter') else ""
+        excavation = self.excavation_filter.currentText().strip() if hasattr(self, 'excavation_filter') else ""
         has_contour_only = self.contour_only_cb.isChecked() if hasattr(self, 'contour_only_cb') else False
+        sort_by = self.sort_combo.currentData() if hasattr(self, 'sort_combo') else "created_at"
+        sort_order = "desc" if (not hasattr(self, 'sort_order_btn')) or self.sort_order_btn.isChecked() else "asc"
 
         self._rubbings = self._service.list_rubbings(
             era=era if era else None,
             keyword=keyword if keyword else None,
+            material=material if material else None,
+            inscription=inscription if inscription else None,
+            excavation_site=excavation if excavation else None,
             has_contour_only=has_contour_only,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
         self.rubbing_list.clear()
@@ -191,6 +256,42 @@ class MainWindow(QMainWindow):
             if idx >= 0:
                 self.era_filter.setCurrentIndex(idx)
         self.detail_panel.set_eras(eras)
+
+    def _update_materials(self):
+        materials = self._service.get_all_materials()
+        current_text = self.material_filter.currentText()
+        self.material_filter.clear()
+        self.material_filter.addItem("全部", "")
+        for m in materials:
+            self.material_filter.addItem(m, m)
+        if current_text:
+            idx = self.material_filter.findText(current_text)
+            if idx >= 0:
+                self.material_filter.setCurrentIndex(idx)
+            else:
+                self.material_filter.setCurrentText(current_text)
+
+    def _update_excavation_sites(self):
+        sites = self._service.get_all_excavation_sites()
+        current_text = self.excavation_filter.currentText()
+        self.excavation_filter.clear()
+        self.excavation_filter.addItem("全部", "")
+        for s in sites:
+            self.excavation_filter.addItem(s, s)
+        if current_text:
+            idx = self.excavation_filter.findText(current_text)
+            if idx >= 0:
+                self.excavation_filter.setCurrentIndex(idx)
+            else:
+                self.excavation_filter.setCurrentText(current_text)
+
+    def _toggle_advanced_filters(self, checked: bool):
+        self.advanced_filter_widget.setVisible(checked)
+        self.advanced_filter_btn.setText("▲ 高级筛选" if checked else "▼ 高级筛选")
+
+    def _on_sort_order_changed(self, checked: bool):
+        self.sort_order_btn.setText("降序 ↓" if checked else "升序 ↑")
+        self._load_rubbings()
 
     def _on_search_changed(self, text: str):
         self._load_rubbings()
@@ -232,6 +333,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"导入成功: {result['rubbing'].get('code', '')}", 3000)
             self._load_rubbings()
             self._update_eras()
+            self._update_materials()
+            self._update_excavation_sites()
         else:
             QMessageBox.warning(self, "导入失败", result.get("error", "未知错误"))
 
@@ -252,6 +355,8 @@ class MainWindow(QMainWindow):
     def _on_batch_import_completed(self):
         self._load_rubbings()
         self._update_eras()
+        self._update_materials()
+        self._update_excavation_sites()
         self.statusBar().showMessage("批量导入完成", 3000)
 
     def _on_edit_image(self):
@@ -336,12 +441,26 @@ class MainWindow(QMainWindow):
         dialog.comparisonUpdated.connect(self._on_comparison_updated)
         dialog.exec()
 
+    def _on_view_feedback(self):
+        dialog = FeedbackHistoryDialog(self._service, parent=self)
+        dialog.weightsChanged.connect(self._on_weights_changed)
+        dialog.exec()
+
     def _on_comparison_updated(self):
         self.statusBar().showMessage("对比记录已更新", 3000)
+
+    def _on_feedback_submitted(self):
+        self.statusBar().showMessage("反馈已提交，权重已根据反馈动态调整", 3000)
+
+    def _on_weights_changed(self):
+        self.similarity_panel.refresh()
+        self.statusBar().showMessage("权重已更新", 3000)
 
     def _on_rubbing_deleted(self, rubbing_id: int):
         self._load_rubbings()
         self._update_eras()
+        self._update_materials()
+        self._update_excavation_sites()
         self._current_rubbing = None
         self.detail_panel.set_rubbing(None)
         self.similarity_panel.set_target_rubbing(None)
@@ -350,6 +469,8 @@ class MainWindow(QMainWindow):
     def _on_detail_changed(self):
         self._load_rubbings()
         self._update_eras()
+        self._update_materials()
+        self._update_excavation_sites()
         if self._current_rubbing:
             updated = self._service.get_rubbing(self._current_rubbing["id"])
             self._current_rubbing = updated
@@ -357,12 +478,15 @@ class MainWindow(QMainWindow):
     def _on_about(self):
         QMessageBox.about(
             self, "关于",
-            "古钱币拓片管理系统 v1.0\n\n"
+            "古钱币拓片管理系统 v2.0\n\n"
             "功能：\n"
             "• 批量导入拓片图片\n"
             "• 登记编号、年代、钱文、材质、出土地\n"
             "• 裁剪、旋转、灰度、对比度调整\n"
             "• 基于轮廓与纹理的智能相似度匹配\n"
-            "• 并排对比与人工确认结论\n\n"
+            "• 并排对比与人工确认结论\n"
+            "• 多条件组合筛选与模糊检索\n"
+            "• 相似结果人工反馈学习\n"
+            "• 动态权重调整与可视化\n\n"
             "技术栈：Python + PySide6 + SQLite + OpenCV"
         )
