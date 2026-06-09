@@ -303,6 +303,14 @@ class RubbingDAO:
             return [r["excavation_site"] for r in rows]
 
     @staticmethod
+    def get_all_inscriptions() -> List[str]:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT inscription FROM rubbings WHERE inscription IS NOT NULL AND inscription != '' ORDER BY inscription"
+            ).fetchall()
+            return [r["inscription"] for r in rows]
+
+    @staticmethod
     def fuzzy_search_inscription(partial_text: str) -> List[Dict[str, Any]]:
         if not partial_text:
             return []

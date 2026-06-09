@@ -203,6 +203,9 @@ class RubbingService:
     def get_all_excavation_sites(self) -> List[str]:
         return RubbingDAO.get_all_excavation_sites()
 
+    def get_all_inscriptions(self) -> List[str]:
+        return RubbingDAO.get_all_inscriptions()
+
     def fuzzy_search_inscription(self, partial_text: str) -> List[Dict[str, Any]]:
         return RubbingDAO.fuzzy_search_inscription(partial_text)
 

@@ -2,8 +2,9 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QListWidget, QListWidgetItem, QToolBar, QStatusBar, QFileDialog,
     QLineEdit, QLabel, QPushButton, QMessageBox, QInputDialog,
-    QComboBox, QGroupBox, QFormLayout, QCheckBox,
+    QComboBox, QGroupBox, QFormLayout, QCheckBox, QCompleter,
 )
+from PySide6.QtCore import QStringListModel
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from typing import Optional, Dict, Any, List
@@ -34,6 +35,9 @@ class MainWindow(QMainWindow):
         self._build_statusbar()
         self._load_rubbings()
         self._update_eras()
+        self._update_materials()
+        self._update_excavation_sites()
+        self._update_inscription_completer()
 
     def _build_ui(self):
         central = QWidget()
@@ -80,6 +84,11 @@ class MainWindow(QMainWindow):
         self.inscription_filter = QLineEdit()
         self.inscription_filter.setPlaceholderText("钱文模糊搜索...")
         self.inscription_filter.textChanged.connect(self._on_filter_changed)
+        self.inscription_completer = QCompleter([], self.inscription_filter)
+        self.inscription_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.inscription_completer.setFilterMode(Qt.MatchContains)
+        self.inscription_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.inscription_filter.setCompleter(self.inscription_completer)
         filter_form.addRow("钱文:", self.inscription_filter)
 
         self.excavation_filter = QComboBox()
@@ -285,6 +294,11 @@ class MainWindow(QMainWindow):
             else:
                 self.excavation_filter.setCurrentText(current_text)
 
+    def _update_inscription_completer(self):
+        inscriptions = self._service.get_all_inscriptions()
+        model = QStringListModel(inscriptions)
+        self.inscription_completer.setModel(model)
+
     def _toggle_advanced_filters(self, checked: bool):
         self.advanced_filter_widget.setVisible(checked)
         self.advanced_filter_btn.setText("▲ 高级筛选" if checked else "▼ 高级筛选")
@@ -335,6 +349,7 @@ class MainWindow(QMainWindow):
             self._update_eras()
             self._update_materials()
             self._update_excavation_sites()
+            self._update_inscription_completer()
         else:
             QMessageBox.warning(self, "导入失败", result.get("error", "未知错误"))
 
@@ -461,6 +476,7 @@ class MainWindow(QMainWindow):
         self._update_eras()
         self._update_materials()
         self._update_excavation_sites()
+        self._update_inscription_completer()
         self._current_rubbing = None
         self.detail_panel.set_rubbing(None)
         self.similarity_panel.set_target_rubbing(None)
@@ -471,6 +487,7 @@ class MainWindow(QMainWindow):
         self._update_eras()
         self._update_materials()
         self._update_excavation_sites()
+        self._update_inscription_completer()
         if self._current_rubbing:
             updated = self._service.get_rubbing(self._current_rubbing["id"])
             self._current_rubbing = updated
