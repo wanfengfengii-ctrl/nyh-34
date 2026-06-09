@@ -8,7 +8,6 @@ from PySide6.QtGui import QPixmap
 from typing import List, Dict, Any, Optional
 
 from ..core.rubbing_service import RubbingService
-from ..db.database import SimilarityFeedbackDAO
 from .utils import load_pixmap_from_path
 
 

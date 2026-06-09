@@ -107,11 +107,6 @@ class EditionRelationDialog(QDialog):
             gid = g.get("id")
             self.source_combo.addItem(name, gid)
             self.target_combo.addItem(name, gid)
-        self.source_combo.currentIndexChanged.connect(self._on_group_changed)
-        self.target_combo.currentIndexChanged.connect(self._on_group_changed)
-
-    def _on_group_changed(self, index: int):
-        self._load_evidence_options()
 
     def _set_defaults(self):
         if self._source_group_id:
@@ -127,36 +122,22 @@ class EditionRelationDialog(QDialog):
         self._load_evidence_options()
 
     def _load_evidence_options(self):
-        source_group_id = self.source_combo.currentData()
-        target_group_id = self.target_combo.currentData()
+        source_id = self.source_combo.currentData()
+        target_id = self.target_combo.currentData()
         self.evidence_combo.clear()
         self.evidence_combo.addItem("不关联对比记录", None)
-        if not source_group_id or not target_group_id:
+        if not source_id or not target_id:
             return
-
-        source_members = self._service.get_edition_group_members(source_group_id)
-        target_members = self._service.get_edition_group_members(target_group_id)
-        if not source_members or not target_members:
-            return
-
-        source_rubbing_ids = {m["id"] for m in source_members}
-        target_rubbing_ids = {m["id"] for m in target_members}
-
-        from ..db.database import ComparisonDAO
-        all_comparisons = ComparisonDAO.list_all()
-        for c in all_comparisons:
-            a_id = c.get("rubbing_a_id")
-            b_id = c.get("rubbing_b_id")
-            a_in_source = a_id in source_rubbing_ids
-            b_in_source = b_id in source_rubbing_ids
-            a_in_target = a_id in target_rubbing_ids
-            b_in_target = b_id in target_rubbing_ids
-            if (a_in_source and b_in_target) or (b_in_source and a_in_target):
+        comparisons = self._service.get_comparisons_for_rubbing(source_id)
+        for c in comparisons:
+            other_id = c.get("rubbing_b_id") if c.get("rubbing_a_id") == source_id else c.get("rubbing_a_id")
+            if other_id == target_id:
                 code_a = c.get("code_a", "")
                 code_b = c.get("code_b", "")
                 score = c.get("similarity_score", 0)
                 conclusion = c.get("conclusion", "")
                 conclusion_label = "待确认"
+                from ..db.database import ComparisonDAO
                 if conclusion == ComparisonDAO.CONCLUSION_SAME_EDITION:
                     conclusion_label = "同版"
                 elif conclusion == ComparisonDAO.CONCLUSION_SUSPECTED_FORGERY:

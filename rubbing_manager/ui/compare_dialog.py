@@ -9,16 +9,8 @@ from typing import List, Dict, Any, Optional
 
 from ..core.rubbing_service import RubbingService
 from ..core.visualization import SimilarityChartCanvas
-from ..db.database import ComparisonDAO, blob_to_array
+from ..db.database import blob_to_array
 from .utils import load_pixmap_from_path
-
-
-CONCLUSION_OPTIONS = [
-    ("待确认", ComparisonDAO.CONCLUSION_UNCONFIRMED),
-    ("同版", ComparisonDAO.CONCLUSION_SAME_EDITION),
-    ("疑似仿品", ComparisonDAO.CONCLUSION_SUSPECTED_FORGERY),
-    ("不同版", ComparisonDAO.CONCLUSION_DIFFERENT),
-]
 
 
 class CompareDialog(QDialog):
@@ -106,7 +98,7 @@ class CompareDialog(QDialog):
         conclusion_layout = QFormLayout(conclusion_box)
 
         self.conclusion_combo = QComboBox()
-        for label, value in CONCLUSION_OPTIONS:
+        for label, value in self._service.get_comparison_conclusion_options():
             self.conclusion_combo.addItem(label, value)
         if self._existing:
             for i in range(self.conclusion_combo.count()):
@@ -226,23 +218,26 @@ class CompareDialog(QDialog):
         conclusion = self.conclusion_combo.currentData()
         notes = self.notes_edit.toPlainText()
 
-        if self._existing:
-            ComparisonDAO.update(self._existing["id"], {
-                "conclusion": conclusion,
-                "notes": notes,
-            })
-        else:
-            data = {
-                "rubbing_a_id": self._rubbing_a["id"],
-                "rubbing_b_id": self._rubbing_b["id"],
-                "similarity_score": self._similarity.get("similarity_score", 0),
-                "contour_similarity": self._similarity.get("contour_similarity", 0),
-                "texture_similarity": self._similarity.get("texture_similarity", 0),
-                "conclusion": conclusion,
-                "notes": notes,
-            }
-            ComparisonDAO.create(data)
+        try:
+            if self._existing:
+                self._service.update_comparison(self._existing["id"], {
+                    "conclusion": conclusion,
+                    "notes": notes,
+                })
+            else:
+                data = {
+                    "rubbing_a_id": self._rubbing_a["id"],
+                    "rubbing_b_id": self._rubbing_b["id"],
+                    "similarity_score": self._similarity.get("similarity_score", 0),
+                    "contour_similarity": self._similarity.get("contour_similarity", 0),
+                    "texture_similarity": self._similarity.get("texture_similarity", 0),
+                    "conclusion": conclusion,
+                    "notes": notes,
+                }
+                self._service.save_comparison(data)
 
-        QMessageBox.information(self, "成功", "对比结论已保存")
-        self.comparisonSaved.emit()
-        self.accept()
+            QMessageBox.information(self, "成功", "对比结论已保存")
+            self.comparisonSaved.emit()
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存失败: {e}")

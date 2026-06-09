@@ -19,7 +19,6 @@ class DetailPanel(QWidget):
     viewComparisonsRequested = Signal()
     viewEditionGraphRequested = Signal()
     editionGroupChanged = Signal()
-    exportReportRequested = Signal(int)
 
     def __init__(self, service: RubbingService, parent=None):
         super().__init__(parent)
@@ -99,13 +98,6 @@ class DetailPanel(QWidget):
         action2_layout.addWidget(self.btn_comparisons)
         layout.addLayout(action2_layout)
 
-        action3_layout = QHBoxLayout()
-        self.btn_export_report = QPushButton("导出研究报告")
-        self.btn_export_report.clicked.connect(self._on_export_report)
-        self.btn_export_report.setEnabled(False)
-        action3_layout.addWidget(self.btn_export_report)
-        layout.addLayout(action3_layout)
-
         edition_box = QGroupBox("版别组")
         edition_layout = QVBoxLayout(edition_box)
 
@@ -154,8 +146,7 @@ class DetailPanel(QWidget):
 
         self.btn_create_group.setEnabled(has_data)
         self.btn_join_group.setEnabled(has_data)
-        self.btn_view_graph.setEnabled(has_data)
-        self.btn_export_report.setEnabled(has_data)
+        self.btn_view_graph.setEnabled(True)
 
         if has_data:
             self._load_edition_groups(rubbing["id"])
@@ -241,11 +232,6 @@ class DetailPanel(QWidget):
                 self.deleteRequested.emit(rubbing_id)
             else:
                 QMessageBox.warning(self, "提示", msg)
-
-    def _on_export_report(self):
-        if not self._current_rubbing:
-            return
-        self.exportReportRequested.emit(self._current_rubbing["id"])
 
     def set_eras(self, eras: list):
         current = self.era_combo.currentText()

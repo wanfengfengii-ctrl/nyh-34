@@ -9,7 +9,6 @@ from typing import List, Dict, Any, Optional
 
 from ..core.rubbing_service import RubbingService
 from ..core.visualization import SimilarityChartCanvas
-from ..db.database import SimilarityFeedbackDAO
 
 
 class FeedbackHistoryDialog(QDialog):

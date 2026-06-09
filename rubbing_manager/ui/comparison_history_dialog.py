@@ -8,24 +8,16 @@ from PySide6.QtGui import QPixmap, QColor
 from typing import List, Dict, Any, Optional
 
 from ..core.rubbing_service import RubbingService
-from ..db.database import ComparisonDAO
 from ..core.visualization import SimilarityChartCanvas
 from .utils import load_pixmap_from_path
 from .compare_dialog import CompareDialog
 
 
-CONCLUSION_LABELS = {
-    ComparisonDAO.CONCLUSION_UNCONFIRMED: "待确认",
-    ComparisonDAO.CONCLUSION_SAME_EDITION: "同版",
-    ComparisonDAO.CONCLUSION_SUSPECTED_FORGERY: "疑似仿品",
-    ComparisonDAO.CONCLUSION_DIFFERENT: "不同版",
-}
-
 CONCLUSION_COLORS = {
-    ComparisonDAO.CONCLUSION_UNCONFIRMED: "#95a5a6",
-    ComparisonDAO.CONCLUSION_SAME_EDITION: "#2ecc71",
-    ComparisonDAO.CONCLUSION_SUSPECTED_FORGERY: "#e74c3c",
-    ComparisonDAO.CONCLUSION_DIFFERENT: "#3498db",
+    "unconfirmed": "#95a5a6",
+    "same_edition": "#2ecc71",
+    "suspected_forgery": "#e74c3c",
+    "different": "#3498db",
 }
 
 
@@ -60,7 +52,7 @@ class ComparisonHistoryDialog(QDialog):
         filter_layout.addWidget(QLabel("结论筛选:"))
         self.filter_combo = QComboBox()
         self.filter_combo.addItem("全部", "")
-        for label, value in CONCLUSION_LABELS.items():
+        for label, value in self._service.get_comparison_conclusion_options():
             self.filter_combo.addItem(label, value)
         self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.filter_combo)
@@ -127,7 +119,7 @@ class ComparisonHistoryDialog(QDialog):
                 self._rubbing_id
             )
         else:
-            self._comparisons = ComparisonDAO.list_all()
+            self._comparisons = self._service.get_all_comparisons()
 
         self._apply_filter()
 
@@ -139,12 +131,14 @@ class ComparisonHistoryDialog(QDialog):
         if filter_val:
             filtered = [c for c in self._comparisons if c.get("conclusion") == filter_val]
 
+        conclusion_labels = self._service.get_comparison_conclusion_labels()
+
         for comp in filtered:
             code_a = comp.get("code_a", "?")
             code_b = comp.get("code_b", "?")
             score = comp.get("similarity_score", 0)
-            conclusion = comp.get("conclusion", ComparisonDAO.CONCLUSION_UNCONFIRMED)
-            conclusion_text = CONCLUSION_LABELS.get(conclusion, "未知")
+            conclusion = comp.get("conclusion", self._service.CONCLUSION_UNCONFIRMED)
+            conclusion_text = conclusion_labels.get(conclusion, "未知")
 
             text = f"{code_a}  ↔  {code_b}\n相似度: {score:.1f}%  [{conclusion_text}]"
             item = QListWidgetItem(text)
@@ -152,7 +146,7 @@ class ComparisonHistoryDialog(QDialog):
 
             color = CONCLUSION_COLORS.get(conclusion, "#000")
             item.setForeground(QColor(color))
-            if conclusion != ComparisonDAO.CONCLUSION_UNCONFIRMED:
+            if conclusion != self._service.CONCLUSION_UNCONFIRMED:
                 f = item.font()
                 f.setBold(True)
                 item.setFont(f)
@@ -191,8 +185,9 @@ class ComparisonHistoryDialog(QDialog):
         self.code_b_label.setText(comp.get("code_b", "—"))
         self.sim_label.setText(f"{comp.get('similarity_score', 0):.1f}%")
 
-        conclusion = comp.get("conclusion", ComparisonDAO.CONCLUSION_UNCONFIRMED)
-        conclusion_text = CONCLUSION_LABELS.get(conclusion, "未知")
+        conclusion = comp.get("conclusion", self._service.CONCLUSION_UNCONFIRMED)
+        conclusion_labels = self._service.get_comparison_conclusion_labels()
+        conclusion_text = conclusion_labels.get(conclusion, "未知")
         color = CONCLUSION_COLORS.get(conclusion, "#000")
         self.conclusion_label.setText(
             f'<span style="color: {color}; font-weight: bold;">{conclusion_text}</span>'
